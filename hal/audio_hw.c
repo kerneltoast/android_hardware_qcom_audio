@@ -739,15 +739,6 @@ int select_devices(struct audio_device *adev, audio_usecase_t uc_id)
         }
     }
 
-    /*
-     * Use stereo-dmic-endfire for common dmic-endfire cases due to
-     * poor ACDB calibration.
-     */
-    if (in_snd_device == SND_DEVICE_IN_HANDSET_DMIC ||
-        in_snd_device == SND_DEVICE_IN_VOICE_DMIC) {
-        in_snd_device = SND_DEVICE_IN_HANDSET_STEREO_DMIC;
-    }
-
     if (out_snd_device == usecase->out_snd_device &&
         in_snd_device == usecase->in_snd_device) {
         return 0;
