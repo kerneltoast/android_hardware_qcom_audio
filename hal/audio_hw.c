@@ -896,6 +896,8 @@ int select_devices(struct audio_device *adev, audio_usecase_t uc_id)
                                                get_usecase_id_from_usecase_type(adev, VOICE_CALL));
             if ((vc_usecase) && (((vc_usecase->devices & AUDIO_DEVICE_OUT_ALL_CODEC_BACKEND) &&
                                  (usecase->devices & AUDIO_DEVICE_OUT_ALL_CODEC_BACKEND)) ||
+                                 ((vc_usecase->devices & AUDIO_DEVICE_OUT_ALL_CODEC_BACKEND) &&
+                                 (usecase->devices & AUDIO_DEVICE_IN_ALL_CODEC_BACKEND)) ||
                                 (usecase->devices == AUDIO_DEVICE_IN_VOICE_CALL))) {
                 in_snd_device = vc_usecase->in_snd_device;
                 out_snd_device = vc_usecase->out_snd_device;
@@ -903,7 +905,8 @@ int select_devices(struct audio_device *adev, audio_usecase_t uc_id)
         } else if (voice_extn_compress_voip_is_active(adev)) {
             voip_usecase = get_usecase_from_list(adev, USECASE_COMPRESS_VOIP_CALL);
             if ((voip_usecase) && ((voip_usecase->devices & AUDIO_DEVICE_OUT_ALL_CODEC_BACKEND) &&
-                (usecase->devices & AUDIO_DEVICE_OUT_ALL_CODEC_BACKEND) &&
+                ((usecase->devices & AUDIO_DEVICE_OUT_ALL_CODEC_BACKEND) ||
+                  ((usecase->devices & ~AUDIO_DEVICE_BIT_IN) & AUDIO_DEVICE_IN_ALL_CODEC_BACKEND)) &&
                  (voip_usecase->stream.out != adev->primary_output))) {
                     in_snd_device = voip_usecase->in_snd_device;
                     out_snd_device = voip_usecase->out_snd_device;
@@ -1894,13 +1897,6 @@ static int out_standby(struct audio_stream *stream)
 
     ALOGD("%s: enter: stream (%p) usecase(%d: %s)", __func__,
           stream, out->usecase, use_case_table[out->usecase]);
-    if (out->usecase == USECASE_COMPRESS_VOIP_CALL) {
-        /* Ignore standby in case of voip call because the voip output
-         * stream is closed in adev_close_output_stream()
-         */
-        ALOGD("%s: Ignore Standby in VOIP call", __func__);
-        return 0;
-    }
 
     lock_output_stream(out);
     if (!out->standby) {
@@ -1912,7 +1908,13 @@ static int out_standby(struct audio_stream *stream)
 
         pthread_mutex_lock(&adev->lock);
         out->standby = true;
-        if (!is_offload_usecase(out->usecase)) {
+        if (out->usecase == USECASE_COMPRESS_VOIP_CALL) {
+            voice_extn_compress_voip_close_output_stream(stream);
+            pthread_mutex_unlock(&adev->lock);
+            pthread_mutex_unlock(&out->lock);
+            ALOGD("VOIP output entered standby");
+            return 0;
+        } else if (!is_offload_usecase(out->usecase)) {
             if (out->pcm) {
                 pcm_close(out->pcm);
                 out->pcm = NULL;
@@ -2667,14 +2669,6 @@ static int in_standby(struct audio_stream *stream)
     ALOGD("%s: enter: stream (%p) usecase(%d: %s)", __func__,
           stream, in->usecase, use_case_table[in->usecase]);
 
-    if (in->usecase == USECASE_COMPRESS_VOIP_CALL) {
-        /* Ignore standby in case of voip call because the voip input
-         * stream is closed in adev_close_input_stream()
-         */
-        ALOGV("%s: Ignore Standby in VOIP call", __func__);
-        return status;
-    }
-
     lock_input_stream(in);
     if (!in->standby && in->is_st_session) {
         ALOGD("%s: sound trigger pcm stop lab", __func__);
@@ -2688,11 +2682,16 @@ static int in_standby(struct audio_stream *stream)
 
         pthread_mutex_lock(&adev->lock);
         in->standby = true;
-        if (in->pcm) {
-            pcm_close(in->pcm);
-            in->pcm = NULL;
+        if (in->usecase == USECASE_COMPRESS_VOIP_CALL) {
+            voice_extn_compress_voip_close_input_stream(stream);
+            ALOGD("VOIP input entered standby");
+        } else {
+            if (in->pcm) {
+                pcm_close(in->pcm);
+                in->pcm = NULL;
+            }
+            status = stop_input_stream(in);
         }
-        status = stop_input_stream(in);
         pthread_mutex_unlock(&adev->lock);
     }
     pthread_mutex_unlock(&in->lock);
